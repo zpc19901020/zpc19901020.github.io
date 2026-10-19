@@ -75,7 +75,50 @@ function loadImages(cb) {
     ['hero', 'pet', 'npc', 'tree', 'boar', 'fox'].forEach(k => { try { IMG[k] = A[k](); } catch (e) { console.warn('art', k, e); } });
     try { IMG.bbg = A.battleBg(W, H); } catch (e) { console.warn('bg', e); }
   }
-  cb();
+  // 外部像素素材（js/sprites.js，base64 内嵌，离线 / file:// 均可用）
+  const SD = window.SPRITES || {};
+  const keys = Object.keys(SD);
+  let left = keys.length;
+  if (!left) { cb(); return; }
+  const done = () => { if (--left === 0) cb(); };
+  keys.forEach(k => {
+    const im = new Image();
+    im.onload = () => { SPR[k] = Object.assign({ img: im }, SD[k]); done(); };
+    im.onerror = () => { console.warn('sprite load failed', k); done(); };
+    im.src = SD[k].src;
+  });
+}
+const SPR = {};
+// 像素精灵：以脚底 (x,y) 为锚点，h 为角色可见高度
+function drawActor(key, anim, dir, frame, x, y, h, o) {
+  const S = SPR[key]; if (!S) return false;
+  const A = S.anims[anim] || S.anims.walk || S.anims.idle; if (!A) return false;
+  o = o || {};
+  const row = A.dirs ? (A.dirs[dir] != null ? A.dirs[dir] : (A.dirs.down != null ? A.dirs.down : 0)) : 0;
+  const n = A.n, f = ((Math.floor(frame) % n) + n) % n;
+  const oy = typeof A.oy === 'object' ? (A.oy[dir] != null ? A.oy[dir] : A.oy.left) : A.oy;
+  const sc = h / S.ref;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  if (o.alpha != null) ctx.globalAlpha = o.alpha;
+  if (o.bright) ctx.filter = 'brightness(' + o.bright + ')';
+  ctx.translate(Math.round(x), Math.round(y));
+  if (o.flip && !A.dirs) ctx.scale(-1, 1);
+  ctx.drawImage(S.img, f * A.w, A.y + row * A.h, A.w, A.h, -A.ox * sc, -oy * sc, A.w * sc, A.h * sc);
+  ctx.restore();
+  return true;
+}
+function animLen(key, anim) { const S = SPR[key]; return S && S.anims[anim] ? S.anims[anim].n : 1; }
+function hasAnim(key, anim) { return !!(SPR[key] && SPR[key].anims[anim]); }
+function dirOf(dx, dy, prev) {
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return prev || 'down';
+  return Math.abs(dx) >= Math.abs(dy) * 0.9 ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+}
+// 行走帧：主角（LPC）第 0 帧为站立，1~8 为循环
+function walkFrame(key, t, moving) {
+  const n = animLen(key, 'walk');
+  if (n >= 9) return moving ? 1 + Math.floor(t * 12) % 8 : 0;
+  return moving ? Math.floor(t * 9) % n : 0;
 }
 
 // 后备形象（万一 art.js 缺失）
@@ -419,9 +462,9 @@ function petStats(lv) {
 }
 const expNeed = lv => Math.round(40 * lv * lv + 30 * lv);
 const MON = {
-  tree: { name: '树妖', img: 'tree', hp: 70, atk: 14, def: 5, spd: 8, mag: 17, exp: 18, gold: 10, h: 130, skill: { name: '缠藤术', type: 'mag', pow: 1.25, fx: 'vine' } },
-  boar: { name: '野猪精', img: 'boar', hp: 95, atk: 19, def: 7, spd: 10, mag: 8, exp: 24, gold: 14, h: 115, skill: { name: '野蛮冲撞', type: 'phys', pow: 1.5, fx: 'dash' } },
-  fox: { name: '狐狸精', img: 'fox', hp: 85, atk: 15, def: 6, spd: 16, mag: 24, exp: 32, gold: 20, h: 120, skill: { name: '狐火', type: 'mag', pow: 1.45, fx: 'bluefire' } },
+  tree: { name: '树妖', img: 'tree', hp: 70, atk: 14, def: 5, spd: 8, mag: 17, exp: 18, gold: 10, h: 150, mh: 66, skill: { name: '缠藤术', type: 'mag', pow: 1.25, fx: 'vine' } },
+  boar: { name: '野猪精', img: 'boar', hp: 95, atk: 19, def: 7, spd: 10, mag: 8, exp: 24, gold: 14, h: 96, mh: 38, skill: { name: '野蛮冲撞', type: 'phys', pow: 1.5, fx: 'dash' } },
+  fox: { name: '狐狸精', img: 'fox', hp: 85, atk: 15, def: 6, spd: 16, mag: 24, exp: 32, gold: 20, h: 92, mh: 36, skill: { name: '狐火', type: 'mag', pow: 1.45, fx: 'bluefire' } },
 };
 const SKILLS = [
   { id: 'jian', name: '剑气斩', mp: 8, desc: '单体·高伤害', target: 'enemy' },
@@ -575,14 +618,17 @@ function updateMap(dt) {
     if (d <= step) { player.x = tg.x; player.y = tg.y; player.path.shift(); }
     else { player.x += dx / d * step; player.y += dy / d * step; }
     if (Math.abs(dx) > 2) player.face = dx > 0 ? 1 : -1;
+    player.dir = dirOf(dx, dy, player.dir);
     player.moving = true; player.walkT += dt;
   } else if (pendingTalk && dist(player, NPC) < 80) { pendingTalk = false; openNpc(); }
   // 宠物跟随
   const pd = dist(pet, player);
+  pet.moving = false;
   if (pd > 55) {
     const sp = Math.min(260, pd * 3.2) * dt;
     pet.x += (player.x - pet.x) / pd * sp; pet.y += (player.y - pet.y) / pd * sp;
     pet.face = player.x > pet.x ? 1 : -1; pet.walkT += dt;
+    pet.dir = dirOf(player.x - pet.x, player.y - pet.y, pet.dir); pet.moving = true;
   }
   // 区域
   const z = zoneAt(Math.floor(player.x / TS), Math.floor(player.y / TS));
@@ -610,8 +656,9 @@ function updateMap(dt) {
       const ok = (x, y) => !solidAtPx(x, y) && zoneAt(Math.floor(x / TS), Math.floor(y / TS)) !== 'village';
       if (ok(nx, ny)) { m.x = nx; m.y = ny; } else if (ok(nx, m.y)) m.x = nx; else if (ok(m.x, ny)) m.y = ny; else m.timer = 0;
       if (Math.abs(dx) > 1) m.face = dx > 0 ? 1 : -1;
+      m.dir = dirOf(dx, dy, m.dir); m.moving = true;
       m.walkT += dt;
-    }
+    } else m.moving = false;
     if (dP < 34 && grace <= 0) { startBattle(m); return; }
   }
   // 刷新
@@ -647,7 +694,11 @@ function drawMap() {
   for (const o of objs) if (vis(o.x, o.base, 260)) list.push({ y: o.base, d: () => drawObj(o) });
   for (const m of monsters) if (vis(m.x, m.y, 80)) list.push({ y: m.y, d: () => drawMapMonster(m) });
   list.push({ y: NPC.y, d: drawMapNpc });
-  list.push({ y: pet.y, d: () => { shadow(pet.x, pet.y, 18); drawSprite('pet', pet.x, pet.y - Math.abs(Math.sin(pet.walkT * 9)) * 4, 46, pet.face < 0); } });
+  list.push({ y: pet.y, d: () => {
+    shadow(pet.x, pet.y, 18);
+    if (!drawActor('pet', 'walk', pet.dir || 'right', walkFrame('pet', pet.walkT, pet.moving), pet.x, pet.y, 40))
+      drawSprite('pet', pet.x, pet.y - Math.abs(Math.sin(pet.walkT * 9)) * 4, 46, pet.face < 0);
+  } });
   list.push({ y: player.y, d: drawMapPlayer });
   list.sort((a, b) => a.y - b.y);
   list.forEach(e => e.d());
@@ -661,12 +712,13 @@ function nameTag(text, x, y, color) {
 function drawMapPlayer() {
   const bob = player.moving ? Math.abs(Math.sin(player.walkT * 10)) * 4 : Math.sin(timeAcc * 2) * 1;
   shadow(player.x, player.y, 20);
-  drawSprite('hero', player.x, player.y - bob, 78, player.face > 0);
+  if (!drawActor('hero', 'walk', player.dir || 'down', walkFrame('hero', player.walkT, player.moving), player.x, player.y + 2, 76))
+    drawSprite('hero', player.x, player.y - bob, 78, player.face > 0);
   nameTag(P.name, player.x, player.y - 82, '#7cff8a');
 }
 function drawMapNpc() {
   shadow(NPC.x, NPC.y, 20);
-  drawSprite('npc', NPC.x, NPC.y, 74, false);
+  if (!drawActor('npc', 'idle', 'down', Math.floor(timeAcc * 1.5), NPC.x, NPC.y + 2, 74)) drawSprite('npc', NPC.x, NPC.y, 74, false);
   nameTag(NPC.name, NPC.x, NPC.y - 78, '#ffd75a');
   // 头顶提示
   const b = Math.sin(timeAcc * 4) * 3;
@@ -676,9 +728,13 @@ function drawMapNpc() {
 function drawMapMonster(m) {
   const M = MON[m.kind];
   const bob = Math.abs(Math.sin(m.walkT * 7)) * 3;
-  shadow(m.x, m.y, 18);
-  drawSprite(M.img, m.x, m.y - bob, M.h * 0.45, m.face > 0);
-  nameTag(M.name + ' Lv' + m.lv, m.x, m.y - M.h * 0.45 - 4, m.lv > P.lv + 1 ? '#ff7a7a' : '#ffffff');
+  const mh = SPR[M.img] ? M.mh : M.h * 0.45;
+  shadow(m.x, m.y, SPR[M.img] ? M.mh * 0.55 : 18);
+  let ok = false;
+  if (hasAnim(M.img, 'walk')) ok = drawActor(M.img, 'walk', m.dir || 'right', walkFrame(M.img, m.walkT, m.moving), m.x, m.y, mh);
+  else if (SPR[M.img]) ok = drawActor(M.img, 'idle', 'right', Math.floor(timeAcc * 2 + m.hx), m.x, m.y - bob * 0.5, mh, { flip: m.face > 0 });
+  if (!ok) drawSprite(M.img, m.x, m.y - bob, M.h * 0.45, m.face > 0);
+  nameTag(M.name + ' Lv' + m.lv, m.x, m.y - mh - 4, m.lv > P.lv + 1 ? '#ff7a7a' : '#ffffff');
 }
 
 // ---------------- UI 组件 ----------------
@@ -771,7 +827,7 @@ function drawHUD() {
   ctx.fillStyle = '#5aff7a'; ctx.beginPath(); ctx.arc(mx + player.x * sc, my + 26 + player.y * sc, 4, 0, 7); ctx.fill();
   // 按钮
   button(W - 210, 196, 64, 34, '存档', () => saveGame(), { size: 15 });
-  button(W - 140, 196, 64, 34, '帮助', () => { helpOpen = true; }, { size: 15 });
+  button(W - 140, 196, 64, 34, '帮助', () => { helpOpen = true; creditsOpen = false; }, { size: 15 });
   button(W - 70, 196, 64, 34, muted ? '静音' : '音效', () => { muted = !muted; }, { size: 15 });
   // 区域横幅
   if (zoneBanner > 0) {
@@ -825,8 +881,29 @@ function drawDialog() {
   });
   button(bx + 460, by, 150, 48, '告辞', () => { dialog = null; });
 }
+let creditsOpen = false;
+const CREDITS = [
+  ['主角 逍遥生 / NPC 孙大夫', 'LPC 角色生成器 · Redshrike, wulax, bluecarrot16, JaidynReiman, ElizaWy, BenCreating 等', 'OGA-BY 3.0 / CC-BY-SA 3.0 / GPL 3.0'],
+  ['召唤兽 小白虎（重新着色）/ 狐狸精', '[LPC] bears, deer, lions and more · tapatilorenzo', 'CC-BY 4.0'],
+  ['野猪精', 'LPC Wild Boar · BenCreating（基于 daneeklu 的 LPC 猪，配色取自 Redshrike）', 'CC-BY-SA 3.0 / GPL 3.0'],
+  ['树妖', 'Loyalty Lies Monsters - Earth Monster 19 · Emerald (Heather Harvey)', 'CC-BY 3.0'],
+];
+function drawCredits() {
+  panel(240, 110, 800, 500, 1);
+  text('素材来源 · Credits', W / 2, 150, 26, '#ffe39a', 'center', true);
+  CREDITS.forEach((c, i) => {
+    const y = 192 + i * 84;
+    text(c[0], 280, y, 18, '#ffd75a', 'left', true);
+    wrapText(c[1], 280, y + 26, 720, 20, 15, '#fff4dc');
+    text('许可：' + c[2], 280, y + 56, 14, '#bff5a8');
+  });
+  text('素材来自 OpenGameArt.org 与 LPC 角色生成器，均为开源许可。地图/建筑/特效/头像为程序原创绘制。', W / 2, 528, 14, '#e8d3a0', 'center');
+  text('完整署名与链接见游戏目录中的 CREDITS.txt', W / 2, 548, 14, '#e8d3a0', 'center');
+  button(W / 2 - 75, 562, 150, 40, '返回', () => { creditsOpen = false; });
+}
 function drawHelp() {
   ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+  if (creditsOpen) { drawCredits(); return; }
   panel(240, 110, 800, 500, 0.94);
   text('游戏说明', W / 2, 150, 28, '#ffe39a', 'center', true);
   const lines = [
@@ -842,8 +919,9 @@ function drawHelp() {
     '· 进度自动保存在本浏览器中（也可点「存档」手动保存）。',
   ];
   lines.forEach((l, i) => text(l, 290, 200 + i * 34, 18, '#fff4dc'));
-  button(W / 2 - 160, 548, 150, 44, '知道了', () => { helpOpen = false; });
-  button(W / 2 + 10, 548, 150, 44, '重新开始', () => {
+  button(W / 2 - 245, 548, 150, 44, '知道了', () => { helpOpen = false; });
+  button(W / 2 - 75, 548, 150, 44, '素材来源', () => { creditsOpen = true; });
+  button(W / 2 + 95, 548, 150, 44, '重新开始', () => {
     if (!confirm('确定要删除存档、重新开始吗？')) return;
     try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
     newGame(); helpOpen = false;
@@ -857,8 +935,8 @@ function drawTitle() {
   const b = Math.sin(timeAcc * 1.5) * 4;
   text('梦幻小西游', W / 2, 190 + b, 86, '#ffe39a', 'center', true, true);
   text('—— 桃源村奇遇 ——', W / 2, 270, 26, '#fff4dc', 'center', true, true);
-  drawSprite('hero', W / 2 - 300, 560, 260, true);
-  drawSprite('pet', W / 2 + 300, 560, 160, true);
+  if (!drawActor('hero', 'idle', 'right', Math.floor(timeAcc * 2), W / 2 - 300, 560, 230)) drawSprite('hero', W / 2 - 300, 560, 260, true);
+  if (!drawActor('pet', 'walk', 'left', 0, W / 2 + 300, 560, 120)) drawSprite('pet', W / 2 + 300, 560, 160, true);
   const has = hasSave();
   if (has) button(W / 2 - 110, 360, 220, 58, '继续游戏', () => startGame(true), { size: 22 });
   button(W / 2 - 110, has ? 436 : 380, 220, 58, '新的旅程', () => { if (has && !confirm('开始新游戏会覆盖原有存档，确定吗？')) return; startGame(false); }, { size: 22 });
@@ -1014,14 +1092,16 @@ function calcDmg(att, def, pow, type) {
 }
 function hurt(u, dmg, crit) {
   u.hp = Math.max(0, u.hp - dmg);
-  u.flash = 0.25; u.shake = 0.3;
+  u.flash = 0.25; u.shake = 0.3; u.hurtT = 0.35;
   popup(u.x + rnd(-10, 10), u.y - u.h * 0.6, (crit ? '暴击 ' : '') + '-' + dmg, crit ? '#ffcf3a' : '#ff5a4a', crit ? 38 : 30);
   burst(u.x, u.y - u.h * 0.45, crit ? 18 : 10, crit ? '#ffd75a' : '#fff1c0', { g: 300 });
   sfx(crit ? 'crit' : 'hit');
   if (u.hp <= 0) {
     u.alive = false;
     addLog(u.name + ' 倒下了！');
-    if (u.side === 'e') tween(500, p => { u.alpha = 1 - p; u.oy = -p * 20; });
+    u.dieT = 0;
+    if (u.side === 'e') tween(hasAnim(u.img, 'die') ? 900 : 500, p => { u.alpha = 1 - Math.max(0, p - 0.4) / 0.6; if (!hasAnim(u.img, 'die')) u.oy = -p * 20; });
+    else if (u.isHero && hasAnim('hero', 'hurt')) tween(400, p => { u.alpha = 1 - p * 0.35; });
     else tween(400, p => { u.alpha = 1 - p * 0.5; u.rot = p * (u.isPet ? 1.2 : -1.2); });
   }
 }
@@ -1039,11 +1119,21 @@ function retarget(u, side) {
 async function dashTo(u, t) {
   const dir = u.side === 'p' ? 1 : -1;
   const tx = t.x + dir * (t.side === 'e' ? 110 : 90) - u.x, ty = t.y + 10 - u.y;
+  u.moving = true;
   await tween(240, p => { u.ox = tx * p; u.oy = ty * p; }, easeOut);
+  u.moving = false;
 }
 async function dashBack(u) {
   const sx = u.ox, sy = u.oy;
+  u.moving = true; u.backing = true;
   await tween(240, p => { u.ox = sx * (1 - p); u.oy = sy * (1 - p); });
+  u.moving = false; u.backing = false;
+}
+// 播放一次性动作（攻击 / 施法 / 受击），返回等待
+function pose(u, anim, ms) {
+  if (!hasAnim(u.img, anim)) return wait(0);
+  u.pose = { anim, t: 0, dur: ms / 1000 };
+  return wait(ms);
 }
 async function perform(u) {
   const a = u.action;
@@ -1052,6 +1142,7 @@ async function perform(u) {
   if (a.type === 'attack') {
     const t = retarget(a.target, u.side === 'p' ? 'e' : 'p'); if (!t) return;
     await dashTo(u, t);
+    pose(u, u.isHero ? 'slash' : 'attack', u.isHero ? 330 : 300); if (u.isHero) await wait(170);
     if (Math.random() < 0.05) { popup(t.x, t.y - t.h * 0.6, '闪避', '#ffffff', 26); addLog(t.name + ' 闪开了 ' + u.name + ' 的攻击'); }
     else { const r = calcDmg(u, t, 1, 'phys'); slashFx(t, '#ffffff'); hurt(t, r.dmg, r.crit); addLog(u.name + ' 攻击 ' + t.name + '，造成 ' + r.dmg + ' 点伤害'); }
     await wait(180); await dashBack(u); return;
@@ -1099,7 +1190,8 @@ async function perform(u) {
     const sk = u.skill;
     popup(u.x, u.y - u.h - 10, sk.name, '#ffb0ff', 28);
     if (sk.fx === 'dash') {
-      await wait(200); await tween(200, p => { u.ox = (t.x - 110 - u.x) * p; u.oy = (t.y + 10 - u.y) * p; }, easeOut);
+      await wait(200); u.moving = true; await tween(200, p => { u.ox = (t.x - 110 - u.x) * p; u.oy = (t.y + 10 - u.y) * p; }, easeOut); u.moving = false;
+      pose(u, 'attack', 300);
       const r = calcDmg(u, t, sk.pow, 'phys'); hurt(t, r.dmg, r.crit); addLog(u.name + ' 使出' + sk.name + '，' + t.name + ' 受到 ' + r.dmg + ' 点伤害');
       await wait(150); await dashBack(u);
     } else {
@@ -1115,6 +1207,8 @@ async function perform(u) {
 async function castFx(u) {
   sfx('magic');
   for (let i = 0; i < 3; i++) burst(u.x, u.y - 10, 8, u.side === 'p' ? '#ffe39a' : '#d6a0ff', { up: -200, g: -100, min: 30, max: 80, life: 0.7 });
+  if (hasAnim(u.img, 'cast')) { await pose(u, 'cast', 520); return; }
+  if (hasAnim(u.img, 'attack')) pose(u, 'attack', 350);
   await tween(350, p => { u.oy = -10 * Math.sin(p * Math.PI); });
 }
 function slashFx(t, color) {
@@ -1190,8 +1284,36 @@ async function endBattle(kind) {
 
 function unitAt(x, y) {
   const all = B.enemies.concat(B.party).filter(u => u.alive);
-  for (const u of all) { const w = u.h * 0.7; if (x > u.x - w / 2 && x < u.x + w / 2 && y > u.y - u.h && y < u.y + 10) return u; }
+  for (const u of all) { const w = u.h * (SPR[u.img] ? ({ boar: 1.6, fox: 1.6, pet: 1.3 }[u.img] || 0.7) : 0.7); if (x > u.x - w / 2 && x < u.x + w / 2 && y > u.y - u.h && y < u.y + 10) return u; }
   return null;
+}
+// 战斗单位的像素动画
+function drawUnitActor(u, x, y, breath, dt) {
+  if (!SPR[u.img]) return false;
+  const face = u.side === 'p' ? 'left' : 'right';
+  const dir = u.backing ? (face === 'left' ? 'right' : 'left') : face;
+  const o = { alpha: u.alpha, flip: u.flip, bright: u.flash > 0 ? 2.2 : (u.alive ? null : 0.6) };
+  u.hurtT = Math.max(0, (u.hurtT || 0) - dt);
+  let anim = 'idle', fr = Math.floor(timeAcc * 2.2 + u.x * 0.01);
+  if (!hasAnim(u.img, 'idle')) { anim = 'walk'; fr = 0; }
+  if (u.pose) {
+    u.pose.t += dt;
+    if (u.pose.t >= u.pose.dur) u.pose = null;
+    else { anim = u.pose.anim; fr = Math.min(animLen(u.img, anim) - 1, Math.floor(u.pose.t / u.pose.dur * animLen(u.img, anim))); }
+  }
+  if (!u.pose && u.moving && hasAnim(u.img, 'walk')) { anim = 'walk'; fr = walkFrame(u.img, timeAcc * 1.6, true); }
+  if (!u.pose && u.hurtT > 0 && u.alive) {
+    if (hasAnim(u.img, 'hurt') && !u.isHero) { anim = 'hurt'; fr = 0; }
+    else if (u.isHero) { anim = 'hurt'; fr = 1; }
+  }
+  if (!u.alive) {
+    u.dieT = (u.dieT || 0) + dt;
+    if (hasAnim(u.img, 'die')) { anim = 'die'; fr = Math.min(animLen(u.img, 'die') - 1, Math.floor(u.dieT * 6)); }
+    else if (u.isHero && hasAnim(u.img, 'hurt')) { anim = 'hurt'; fr = Math.min(5, Math.floor(u.dieT * 10)); }
+    else if (hasAnim(u.img, 'hurt')) { anim = 'hurt'; fr = 0; }
+  }
+  const hh = (anim === 'idle' || anim === 'walk') ? u.h + breath * 0.6 : u.h;
+  return drawActor(u.img, anim, dir, fr, x, y, hh, o);
 }
 function drawBattle(dt) {
   if (IMG.bbg) { ctx.drawImage(IMG.bbg, 0, 0, W, H); }
@@ -1214,7 +1336,7 @@ function drawBattle(dt) {
     ctx.restore();
     const breath = u.alive ? Math.sin(timeAcc * 3 + u.x) * 2 : 0;
     ctx.save(); ctx.translate(x, y); ctx.rotate(u.rot); ctx.translate(-x, -y);
-    drawSprite(u.img, x, y + breath * 0.3, u.h + breath, u.flip, u.alpha, u.flash > 0 ? 2.2 : (u.alive ? null : 0.6));
+    if (!drawUnitActor(u, x, y, breath, dt)) drawSprite(u.img, x, y + breath * 0.3, u.h + breath, u.flip, u.alpha, u.flash > 0 ? 2.2 : (u.alive ? null : 0.6));
     ctx.restore();
     if (u.defending && u.alive) { ctx.strokeStyle = 'rgba(120,190,255,0.7)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y - u.h * 0.5, u.h * 0.45, 0, 7); ctx.stroke(); }
     if (u.alive) {
@@ -1355,5 +1477,12 @@ function boot() {
 }
 ctx.fillStyle = '#1b1410'; ctx.fillRect(0, 0, W, H);
 text('加载中……', W / 2, H / 2, 28, '#ffe9a8', 'center', true);
+// 自动化测试钩子（仅在网址带 ?test=1 时启用）
+if (/[?&]test=1/.test(location.search)) window.__xyj = {
+  scene: () => scene, player: () => ({ x: player.x, y: player.y, dir: player.dir, moving: player.moving }),
+  battle: kind => { const m = monsters.find(x => x.kind === kind) || monsters[0]; if (m) startBattle(m); },
+  forceEnemies: kinds => { if (!B) return; const t = B.enemies[0]; B.enemies = kinds.map((k, i) => makeUnit(Object.assign({}, t, { kind: k, img: MON[k].img, h: MON[k].h, name: MON[k].name, skill: MON[k].skill, x: EPOS[i][0], y: EPOS[i][1], ox: 0, oy: 0 }))); },
+  phase: () => B && B.phase, result: () => B && B.result,
+};
 loadImages(boot);
 })();

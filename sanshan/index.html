@@ -268,7 +268,7 @@ function drawNpc(n){
 function drawPlayer(){
   const p=scene.pl; shadow(p.x,p.y,20,7);
   let base=p.dir==='side'?0:(p.dir==='down'?6:12); let idx=base+(p.moving?Math.floor(p.f)%6:0);
-  const bob=p.moving?0:Math.sin(scene.t*2.5)*0.6;
+  const bob=p.moving?-Math.abs(Math.sin(p.f*Math.PI/3))*4:Math.sin(scene.t*2.5)*0.6;
   drawFrame('ll_run',idx,p.x,p.y+bob,RUN_SC,p.dir==='side'&&p.flip);
   nameTag('狼狼',p.x,p.y+20,'#ffe27a');
 }
@@ -375,7 +375,7 @@ function startBattle(){
 function mkWolf(name,hp,atk,sc,tint,boss){return {name,hp,maxhp:hp,atk,sc,tint,boss,f:0,x:0,y:0,flash:0,alive:true,alpha:1,dead:false,ph:Math.random()*6};}
 function beginBattle(){
   mode='battle'; $('quest').style.display='none'; Snd.bgm('battle');
-  B.enemies=[mkWolf('妖狼头领',220,[30,38],0.86,'rgba(120,0,40,.18)',true),mkWolf('妖狼',120,[20,27],0.7),mkWolf('妖狼',120,[20,27],0.7)];
+  B.enemies=[mkWolf('妖狼头领',160,[34,42],0.86,'rgba(120,0,40,.18)',true),mkWolf('妖狼',85,[23,30],0.7),mkWolf('妖狼',85,[23,30],0.7)];
   B.pl={x:0,y:0,f:0,flip:false,flash:0,busy:false,defend:false};
   B.fx=[]; B.nums=[]; B.shake=0; B.t=0; B.target=null; B.turn='player'; B.over=false;
   bLayout(); showCmd('main'); updHud();
@@ -430,7 +430,7 @@ async function doAction(a,target){
     const sw={k:'sword',x:sx,y:sy,ang:Math.atan2(ty-sy,tx-sx),t:0,trail:[]}; B.fx.push(sw);
     await tween(sw,{x:tx,y:ty},420,t=>t*t);
     sw.done=true; B.fx.push({k:'burst',x:tx,y:ty,t:0});
-    dmgEnemy(target,rand(78,95),true); pl.f=0; await sleep(500);
+    dmgEnemy(target,rand(96,116),true); pl.f=0; await sleep(500);
   } else if(a==='heal'){
     P.mp-=20; updHud(); pl.f=6; Snd.play('heal');
     B.fx.push({k:'heal',x:pl.x,y:pl.y,t:0});

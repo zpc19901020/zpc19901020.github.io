@@ -276,15 +276,15 @@ function updateScene(dt){
   scene.t+=dt; const p=scene.pl; let vx=0,vy=0; const k=scene.keys;
   if(dlg||busy) { p.moving=false; return; }
   if(k.ArrowLeft||k.a||k.A)vx-=1; if(k.ArrowRight||k.d||k.D)vx+=1; if(k.ArrowUp||k.w||k.W)vy-=1; if(k.ArrowDown||k.s||k.S)vy+=1;
-  const SPD=190;
+  const SPD=160, STRIDE_PX=26; // 每帧对应移动距离：6帧一个完整步伐≈156像素（约1.8个身高）
   if(vx||vy){ p.tx=null; p.path=null; p.talkTo=null; const l=Math.hypot(vx,vy); vx/=l; vy/=l; }
   else if(p.tx!=null){ let dx=p.tx-p.x,dy=p.ty-p.y,d=Math.hypot(dx,dy); if(d<5){ if(p.path&&p.path.length){const f=p.path.shift();p.tx=f[0];p.ty=f[1];dx=p.tx-p.x;dy=p.ty-p.y;d=Math.hypot(dx,dy)||1;vx=dx/d;vy=dy/d;} else p.tx=null;} else {vx=dx/d;vy=dy/d;} }
   if(vx||vy){
-    let nx=p.x+vx*SPD*dt, ny=p.y+vy*SPD*dt;
+    const ox=p.x, oy=p.y; let nx=p.x+vx*SPD*dt, ny=p.y+vy*SPD*dt;
     if(inPoly(nx,ny,WALK)){p.x=nx;p.y=ny;} else if(inPoly(nx,p.y,WALK)){p.x=nx;} else if(inPoly(p.x,ny,WALK)){p.y=ny;} else {p.tx=null;p.path=null;}
     // NPC 碰撞
     for(const n of scene.npcs){ const d=Math.hypot(p.x-n.x,(p.y-n.y)*1.6); if(d<26){ const a=Math.atan2((p.y-n.y)*1.6,p.x-n.x); p.x=n.x+Math.cos(a)*26; p.y=n.y+Math.sin(a)*26/1.6; } }
-    p.moving=true; p.f+=dt*11;
+    p.moving=true; p.f+=Math.hypot(p.x-ox,p.y-oy)/STRIDE_PX;
     if(Math.abs(vx)>Math.abs(vy)*0.75){p.dir='side';p.flip=vx<0;} else p.dir=vy>0?'down':'up';
     if(Math.floor(p.f)%3===0&&Math.floor(p.f)!==p.lastStep){p.lastStep=Math.floor(p.f);Snd.play('step');}
   } else p.moving=false;
